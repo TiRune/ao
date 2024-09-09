@@ -77,6 +77,7 @@ class MyDTypeTensor(TorchAOBaseTensor):
         layout_tensor: MyDTypeLayout,
         shape: torch.Size,
         dtype: Optional[torch.dtype] = None,
+        requires_grad: bool = False,
     ):
         kwargs = {}
         kwargs["device"] = layout_tensor.device
@@ -86,7 +87,7 @@ class MyDTypeTensor(TorchAOBaseTensor):
             else layout_tensor.layout
         )
         kwargs["dtype"] = dtype
-        kwargs["requires_grad"] = False
+        kwargs["requires_grad"] = requires_grad
         return torch.Tensor._make_wrapper_subclass(cls, shape, **kwargs)  # type: ignore[attr-defined]
 
     def __init__(
@@ -94,6 +95,7 @@ class MyDTypeTensor(TorchAOBaseTensor):
         layout_tensor: MyDTypeLayout,
         shape: torch.Size,
         dtype: Optional[torch.dtype] = None,
+        requires_grad: bool = False,
     ):
         self.layout_tensor = layout_tensor
 
@@ -201,6 +203,7 @@ class PlainMyDTypeLayout(MyDTypeLayout):
         int_data: torch.Tensor,
         scale: torch.Tensor,
         layout_type: LayoutType,
+        requires_grad: bool = False,
     ):
         kwargs = {}
         kwargs["device"] = int_data.device
@@ -208,7 +211,7 @@ class PlainMyDTypeLayout(MyDTypeLayout):
             kwargs.get("layout") if kwargs.get("layout", False) else int_data.layout
         )
         kwargs["dtype"] = int_data.dtype
-        kwargs["requires_grad"] = False
+        kwargs["requires_grad"] = requires_grad
         shape = int_data.shape
         return torch.Tensor._make_wrapper_subclass(cls, shape, **kwargs)  # type: ignore[attr-defined]
 
@@ -217,6 +220,7 @@ class PlainMyDTypeLayout(MyDTypeLayout):
         int_data: torch.Tensor,
         scale: torch.Tensor,
         layout_type: LayoutType,
+        requires_grad: bool = False,
     ):
         self.int_data = int_data
         self.scale = scale
@@ -330,37 +334,42 @@ to_my_dtype = MyDTypeTensor.from_float
 ########
 # Test #
 ########
-from torchao.utils import benchmark_model
 
-m = M()
-example_inputs = (100 * torch.randn(1024, 1024),)
-NUM_WARMUPS = 10
-NUM_RUNS = 100
+def test():
+    from torchao.utils import benchmark_model
+    
+    m = M()
+    example_inputs = (100 * torch.randn(1024, 1024),)
+    NUM_WARMUPS = 10
+    NUM_RUNS = 100
+    
+    for _ in range(NUM_WARMUPS):
+        m(*example_inputs)
+    print("before quantization:", benchmark_model(m, NUM_RUNS, example_inputs))
+    
+    compiled = torch.compile(m, mode="max-autotune")
+    for _ in range(NUM_WARMUPS):
+        compiled(*example_inputs)
+    print("after compile:", benchmark_model(compiled, NUM_RUNS, example_inputs))
+    
+    # convert weights to quantized weights
+    m.linear.weight = torch.nn.Parameter(
+        to_my_dtype(m.linear.weight), requires_grad=False
+    )
+    
+    for _ in range(NUM_WARMUPS):
+        m(*example_inputs)
+    
+    print("after quantization:", benchmark_model(m, NUM_RUNS, example_inputs))
+    
+    m = torch.compile(m, mode="max-autotune")
+    
+    for _ in range(NUM_WARMUPS):
+        m(*example_inputs)
+    
+    # NOTE: currently there is no speedup because we just dequantize the weight in the _quantized_linear op
+    # we plan to add custom op example in the future and that will help us to get speedup
+    print("after quantization and compile:", benchmark_model(m, NUM_RUNS, example_inputs))
 
-for _ in range(NUM_WARMUPS):
-    m(*example_inputs)
-print("before quantization:", benchmark_model(m, NUM_RUNS, example_inputs))
-
-compiled = torch.compile(m, mode="max-autotune")
-for _ in range(NUM_WARMUPS):
-    compiled(*example_inputs)
-print("after compile:", benchmark_model(compiled, NUM_RUNS, example_inputs))
-
-# convert weights to quantized weights
-m.linear.weight = torch.nn.Parameter(
-    to_my_dtype(m.linear.weight), requires_grad=False
-)
-
-for _ in range(NUM_WARMUPS):
-    m(*example_inputs)
-
-print("after quantization:", benchmark_model(m, NUM_RUNS, example_inputs))
-
-m = torch.compile(m, mode="max-autotune")
-
-for _ in range(NUM_WARMUPS):
-    m(*example_inputs)
-
-# NOTE: currently there is no speedup because we just dequantize the weight in the _quantized_linear op
-# we plan to add custom op example in the future and that will help us to get speedup
-print("after quantization and compile:", benchmark_model(m, NUM_RUNS, example_inputs))
+if __name__ == "__main__":
+    test()
