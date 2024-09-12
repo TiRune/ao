@@ -66,6 +66,7 @@ def run_evaluation(repo_id, tasks, limit, device, precision, quantization, spars
         model = autoquant(model.to(device=device))
 
     if quantization != "autoquant" and compile:
+        model = model.to(device)
         model = torch.compile(model, mode="max-autotune", fullgraph=True)
 
     if sparsity == "semi_sparse":
@@ -89,7 +90,7 @@ def run_evaluation(repo_id, tasks, limit, device, precision, quantization, spars
     with torch.no_grad():
         result = evaluate(
             HFLM(
-                pretrained=model.to(device),
+                pretrained=model,
                 tokenizer=tokenizer,
                 batch_size=batch_size,
                 max_length=max_length),
